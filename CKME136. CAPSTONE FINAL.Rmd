@@ -1,0 +1,456 @@
+---
+title: "CKME 136"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+##Load data into R Programming.
+
+```{r}
+forest_fire<-read.csv("C:\\Users\\sfagb\\Desktop\\ckme136\\forestfiresn.csv",header=T, sep = ",")
+head(forest_fire)
+str(forest_fire)
+
+```
+##How to determine missing values in each variable.
+```{r}
+str(forest_fire)
+summary(forest_fire)
+propmiss <- function(dataframe) lapply(dataframe,function(x) data.frame(nmiss=sum(is.na(x)), n=length(x), propmiss=sum(is.na(x))/length(x)))
+propmiss(forest_fire)
+
+```
+##To determine outlier and its proportion to entire dataset
+```{r}
+
+outlierKD <- function(dt, var) {
+  var_name <- eval(substitute(var),eval(dt))
+  tot <- sum(!is.na(var_name))
+  na1 <- sum(is.na(var_name))
+  m1 <- mean(var_name, na.rm = T)
+  par(mfrow=c(2, 2), oma=c(0,0,3,0))
+  boxplot(var_name, main="With outliers")
+  hist(var_name, main="With outliers", xlab=NA, ylab=NA)
+  outlier <- boxplot.stats(var_name)$out
+  mo <- mean(outlier)
+  var_name <- ifelse(var_name %in% outlier, NA, var_name)
+  boxplot(var_name, main="Without outliers")
+  hist(var_name, main="Without outliers", xlab=NA, ylab=NA)
+  title("Outlier Check", outer=TRUE)
+  na2 <- sum(is.na(var_name))
+  message("Outliers identified: ", na2 - na1, " from ", tot, " observations")
+  message("Proportion (%) of outliers: ", (na2 - na1) / tot*100)
+  message("Mean of the outliers: ", mo)
+  m2 <- mean(var_name, na.rm = T)
+  message("Mean without removing outliers: ", m1)
+  message("Mean if we remove outliers: ", m2)
+  response <- readline(prompt="Do you want to remove outliers and to replace with NA? [yes/no]: ")
+  if(response == "y" | response == "yes"){
+    dt[as.character(substitute(var))] <- invisible(var_name)
+    assign(as.character(as.list(match.call())$dt), dt, envir = .GlobalEnv)
+    message("Outliers successfully removed", "\n")
+    return(invisible(dt))
+  } else{
+    message("Nothing changed", "\n")
+    return(invisible(var_name))
+  }
+}
+
+``` 
+##Outlier of variable "area" and its protion. 
+```{r}
+outlierKD(forest_fire, area)
+
+```
+##Log tranformation of dependent variable(area) to reduce outlier
+```{r}
+#area_log<-log(forest_fire$area+1)
+#summary(area_log)
+#hist(area_log)
+#boxplot(area_log, horizontal = T)
+
+```
+##set the limit for the dependent variable 
+```{r}
+#outier<-boxplot(rest_fire, coef = 2)
+#utlier
+
+```
+
+
+##Bivariate analysis
+```{r}
+pairs(forest_fire[,-c(1:4)], panel = panel.smooth)
+
+```
+
+##new clean data for the analysis
+```{r}
+forest_firenew<-data.frame(forest_fire[,-c(1:4,13)])
+#forest_firenew<-forest_firenew[,-9]
+str(forest_firenew)
+head(forest_firenew)
+```
+##Data normalisation
+```{r}
+library(corrplot)
+normalize <- function(x) {
+               return ((x - min(x)) / (max(x) - min(x))) }
+forest_firescaled <- as.data.frame(lapply(forest_firenew, normalize))
+summary(forest_firescaled)
+
+#forest_firescaled <- as.data.frame(lapply(forest_fire[,-c(1:4)], normalize))
+#summary(forest_firescaled)
+#hist(forest_firescaled$area)
+#m<-cor(forest_firescaled)
+#corrplot(m ,method="number",type="lower")
+```
+
+
+##We need to break target variable into binary(0 and 1) for the purpose of logistic regression only by using gtools package.
+```{r}
+library(gtools)
+forest_binary <- quantcut(forest_fire$area,2)
+head(forest_binary)
+class(forest_binary)
+forest_binary <- as.character(forest_binary)
+
+forest_binary[which(forest_binary =="[0,0.52]")] <- "no"
+
+forest_binary[which(forest_binary =="(0.52,1.09e+03]")] <- "yes"
+
+table(forest_binary)
+area<-forest_binary
+forest_firenew<-data.frame(forest_firescaled,area)
+head(forest_firenew)
+boxplot.stats(forest_firenew$area)
+```
+
+##Creating training and test data set:
+##The data set will be divided into 2 portions in the ratio of 70: 30 (assumed) for the training and test data set respectively.
+```{r}
+library(caret)
+library(lattice)
+library(ggplot2)
+set.seed(998)
+forest_split <- createDataPartition(forest_firenew$area, p = .70, list = FALSE)
+forest_train <- forest_firenew[forest_split,]
+forest_test <- forest_firenew[-forest_split,]
+#forest_split <- sample(nrow(forest_firenew), floor(nrow(forest_firenew)*0.7))
+#forest_train <- forest_firenew[forest_split,]
+#forest_test <- forest_firenew[-forest_split,]
+```
+
+```{r}
+dim(forest_train)
+head(forest_train)
+str(forest_test)
+dim(forest_test)
+```
+##Ten fold cross validation
+```{r}
+library(caret)
+fitControl <- trainControl(## 10-fold CV
+                           method = "repeatedcv",
+                           number = 10,
+                           ## repeated ten times 
+                           repeats=10,
+                           ## Estimate class probabilities
+                           classProbs = TRUE,
+                           ## Evaluate performance using 
+                           ## the following function
+                           summaryFunction = twoClassSummary)
+
+gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9), 
+                        n.trees = (1:30)*50, 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 20)
+nrow(gbmGrid)
+```
+##Model fittings with Stochastic Gradient Boosting(1)
+
+```{r}
+library(caret)
+library(pROC)
+library(gbm)
+library(stats)
+library(splines)
+library(parallel)
+library(survival)
+set.seed(825)
+gbmFit1 <- train(area ~ ., data = forest_train, 
+                 method = "gbm", ##Stochastic Gradient Boosting  
+                 trControl = fitControl,
+                 tuneGrid = gbmGrid,
+                 ## Specify which metric to optimize
+                 metric = "ROC",
+                                  verbose = FALSE)
+gbmFit1
+gbmPredictions=predict(gbmFit1, newdata=forest_test)
+
+confusionMatrix(gbmPredictions,forest_test$area, positive = "yes")
+accuracy<-mean(gbmPredictions==forest_test$area)
+accuracy
+recall<-sensitivity(gbmPredictions,forest_test$area)
+recall
+precision<-posPredValue(gbmPredictions,forest_test$area)
+precision
+F1<-(2*precision*recall)/(precision+recall)
+F1
+```
+
+
+##GBM ROC CURVE 
+```{r}
+library(ROCR)
+
+
+gbmPrediction<-predict(gbmFit1,newdata = forest_test, type = "prob")[,2]
+
+gbm<-prediction(gbmPrediction, forest_test$area)
+roc<-performance(gbm, "tpr", "fpr")
+plot(roc)
+gbm_auc<-performance(gbm,"auc")
+gbm_auc<-round(unlist(slot(gbm_auc,"y.values")),4)
+gbm_auc
+
+library(ROSE)
+ggbm<-roc.curve(forest_test$area,gbmPrediction)
+ggbm
+legend(.6,.2,gbm_auc,title = "GBM AUC ")
+
+
+
+```
+
+
+##Model Random Forest(2)
+```{r}
+library(caret)
+library(randomForest)
+library(ggplot2)
+set.seed(825)
+rfFit1 <- train(area ~ ., data = forest_train, 
+                 method = "rf", ##Random Forest
+                 trControl = fitControl,
+               metric="ROC",
+                 
+                 verbose = FALSE)
+rfFit1
+
+rfPredictions=predict(rfFit1, newdata=forest_test)
+confusionMatrix(rfPredictions,forest_test$area)
+accuracy<-mean(rfPredictions==forest_test$area)
+accuracy
+recall<-sensitivity(rfPredictions,forest_test$area)
+recall
+precision<-posPredValue(rfPredictions,forest_test$area)
+precision
+F1<-(2*precision*recall)/(precision+recall)
+F1
+```
+
+##RF ROC CURVE 
+```{r}
+library(ROCR)
+
+
+rfPrediction<-predict(rfFit1,newdata = forest_test, type = "prob")[,2]
+
+rf<-prediction(rfPrediction, forest_test$area)
+roc<-performance(rf, "tpr", "fpr")
+plot(roc)
+rf_auc<-performance(rf,"auc")
+rf_auc<-round(unlist(slot(rf_auc,"y.values")),4)
+rf_auc
+
+library(ROSE)
+rf1<-roc.curve(forest_test$area,rfPrediction)
+rf1
+legend(.6,.2,rf_auc,title = "RANDOM FOREST AUC")
+
+
+
+
+
+```
+##Neural Netwok(3)
+```{r}
+library(caret)
+library(nnet)
+set.seed(825)
+nnetFit1 <- train(area ~ ., data = forest_train, 
+                 method = "nnet", ##neural Metwork
+                 trControl = fitControl,
+                 metric="ROC",
+                 
+                 verbose = FALSE)
+nnetFit1
+nnetPredictions=predict(nnetFit1, newdata=forest_test)
+
+confusionMatrix(nnetPredictions,forest_test$area)
+accuracy<-mean(nnetPredictions==forest_test$area)
+accuracy
+recall<-sensitivity(nnetPredictions,forest_test$area)
+recall
+precision<-posPredValue(nnetPredictions,forest_test$area)
+precision
+F1<-(2*precision*recall)/(precision+recall)
+F1
+```
+##NEURAL NETWORK ROC CURVE 
+```{r}
+library(ROCR)
+
+
+nnetPrediction<-predict(nnetFit1,newdata = forest_test, type = "prob")[,1]
+
+nnet<-prediction(nnetPrediction, forest_test$area)
+roc<-performance(nnet, "tpr", "fpr")
+plot(roc)
+nnet_auc<-performance(nnet,"auc")
+nnet_auc<-round(unlist(slot(nnet_auc,"y.values")),4)
+nnet_auc
+
+library(ROSE)
+nnet1<-roc.curve(forest_test$area,nnetPrediction)
+nnet1
+legend(.6,.2,nnet_auc,title = "NEURAL NETWORK AUC")
+
+
+
+```
+
+##svm(4)
+```{r}
+library(caret)
+library(e1071)
+library(gtools)
+set.seed(825)
+svmFit1 <- train(area ~ ., data = forest_train, 
+                 method = "svmLinear2", 
+                 trControl = fitControl,
+                 metric="ROC",
+                 
+                 verbose = FALSE)
+svmFit1
+svmPredictions=predict(svmFit1, newdata=forest_test)
+confusionMatrix(svmPredictions,forest_test$area)
+accuracy<-mean(svmPredictions==forest_test$area)
+accuracy
+recall<-sensitivity(svmPredictions,forest_test$area)
+recall
+precision<-posPredValue(svmPredictions,forest_test$area)
+precision
+F1<-(2*precision*recall)/(precision+recall)
+F1
+```
+
+##SVM  ROC CURVE 
+```{r}
+library(ROCR)
+
+
+svmPrediction<-predict(svmFit1,newdata = forest_test, type = "prob")[,1]
+
+svm<-prediction(svmPrediction, forest_test$area)
+roc<-performance(svm, "tpr", "fpr")
+plot(roc)
+svm_auc<-performance(svm,"auc")
+svm_auc<-round(unlist(slot(svm_auc,"y.values")),4)
+svm_auc
+
+library(ROSE)
+svm1<-roc.curve(forest_test$area,svmPrediction)
+svm1
+legend(.6,.2,svm_auc,title = " SVM AUC")
+
+
+
+```
+
+
+
+##logistic(5)
+```{r}
+library(caret)
+library(LogicReg)
+set.seed(1055)
+logFit <- train(area ~ ., data = forest_train, 
+                 method = "glm", ##logistic
+                  trControl = fitControl,family= "binomial", metric="ROC")
+logFit
+logPredictions=predict(logFit, newdata=forest_test)
+confusionMatrix(logPredictions,forest_test$area)
+accuracy<-mean(logPredictions==forest_test$area)
+accuracy
+recall<-sensitivity(logPredictions,forest_test$area)
+recall
+precision<-posPredValue(logPredictions,forest_test$area)
+precision
+F1<-(2*precision*recall)/(precision+recall)
+F1
+```
+##LOGISTIC ROC CURVE 
+```{r}
+library(ROCR)
+
+
+logPrediction<-predict(logFit,newdata = forest_test, type = "prob")[,2]
+
+log<-prediction(logPrediction, forest_test$area)
+roc<-performance(log, "tpr", "fpr")
+plot(roc)
+log_auc<-performance(log,"auc")
+log_auc<-round(unlist(slot(log_auc,"y.values")),4)
+log_auc
+
+library(ROSE)
+log1<-roc.curve(forest_test$area,logPrediction)
+log1
+legend(.6,.2,log_auc,title = "LOGISTICS AUC")
+
+
+
+```
+
+##Model comparison Based on 10 fold validation
+
+
+```{r}
+resamp <- resamples(list(SVM = svmFit1, Logistic = logFit, GBM= gbmFit1,RF=rfFit1,NN=nnetFit1))
+ summary(resamp)
+ modelDifferences <- diff(resamp)
+summary(modelDifferences)
+```
+
+## To pull all model AUC together.
+```{r}
+par(mfrow=c(2,2))
+
+library(ROSE)
+log1<-roc.curve(forest_test$area,logPrediction)
+log1
+legend(.6,.4,log_auc,title = "LOGISTICS AUC")
+svm1<-roc.curve(forest_test$area,svmPrediction)
+svm1
+legend(.6,.4,svm_auc,title = " SVM AUC")
+nnet1<-roc.curve(forest_test$area,nnetPrediction)
+nnet1
+legend(.6,.4,nnet_auc,title = "NEURAL NETWORK AUC")
+rf1<-roc.curve(forest_test$area,rfPrediction)
+rf1
+legend(.6,.4,rf_auc,title = "RANDOM FOREST AUC")
+ggbm<-roc.curve(forest_test$area,gbmPrediction)
+ggbm
+legend(.6,.4,gbm_auc,title = "GBM AUC ")
+
+
+
+
+
+```
+
+
+
